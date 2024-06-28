@@ -33,7 +33,7 @@ def _create(name, pretrained=True, channels=3, classes=80, autoshape=True, verbo
 
     from models.common import AutoShape, DetectMultiBackend
     from models.experimental import attempt_load
-    from models.yolo import ClassificationModel, DetectionModel, SegmentationModel
+    from models.yolo import ClassificationModel, Model, SegmentationModel
     from utils.downloads import attempt_download
     from utils.general import LOGGER, ROOT, check_requirements, intersect_dicts, logging
     from utils.torch_utils import select_device
@@ -65,7 +65,7 @@ def _create(name, pretrained=True, channels=3, classes=80, autoshape=True, verbo
                 model = attempt_load(path, device=device, fuse=False)  # arbitrary model
         else:
             cfg = list((Path(__file__).parent / "models").rglob(f"{path.stem}.yaml"))[0]  # model.yaml path
-            model = DetectionModel(cfg, channels, classes)  # create model
+            model = Model(cfg, channels, classes)  # create model
             if pretrained:
                 ckpt = torch.load(attempt_download(path), map_location=device)  # load
                 csd = ckpt["model"].float().state_dict()  # checkpoint state_dict as FP32

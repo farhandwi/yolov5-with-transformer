@@ -68,7 +68,7 @@ if platform.system() != "Windows":
     ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 from models.experimental import attempt_load
-from models.yolo import ClassificationModel, Detect, DetectionModel, SegmentationModel
+from models.yolo import ClassificationModel, Detect, Model, SegmentationModel
 from utils.dataloaders import LoadImages
 from utils.general import (
     LOGGER,
@@ -180,7 +180,7 @@ def export_onnx(model, im, file, opset, dynamic, simplify, prefix=colorstr("ONNX
         if isinstance(model, SegmentationModel):
             dynamic["output0"] = {0: "batch", 1: "anchors"}  # shape(1,25200,85)
             dynamic["output1"] = {0: "batch", 2: "mask_height", 3: "mask_width"}  # shape(1,32,160,160)
-        elif isinstance(model, DetectionModel):
+        elif isinstance(model, Model):
             dynamic["output0"] = {0: "batch", 1: "anchors"}  # shape(1,25200,85)
 
     torch.onnx.export(
@@ -871,8 +871,8 @@ def run(
     # Finish
     f = [str(x) for x in f if x]  # filter out '' and None
     if any(f):
-        cls, det, seg = (isinstance(model, x) for x in (ClassificationModel, DetectionModel, SegmentationModel))  # type
-        det &= not seg  # segmentation models inherit from SegmentationModel(DetectionModel)
+        cls, det, seg = (isinstance(model, x) for x in (ClassificationModel, Model, SegmentationModel))  # type
+        det &= not seg  # segmentation models inherit from SegmentationModel(Model)
         dir = Path("segment" if seg else "classify" if cls else "")
         h = "--half" if half else ""  # --half FP16 inference arg
         s = (
