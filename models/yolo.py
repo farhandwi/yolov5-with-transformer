@@ -14,9 +14,11 @@ import platform
 import sys
 from copy import deepcopy
 from pathlib import Path
+from models.common import TransformerEncoderLayer
 
 import torch
 import torch.nn as nn
+from models.common import *
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]  # YOLOv5 root directory
@@ -213,58 +215,70 @@ class BaseModel(nn.Module):
         return self
 
 
-class DetectionModel(BaseModel):
-    # YOLOv5 detection model
-    def __init__(self, cfg="yolov5s.yaml", ch=3, nc=None, anchors=None):
-        """Initializes YOLOv5 model with configuration file, input channels, number of classes, and custom anchors."""
-        super().__init__()
+# models/yolo.py
+import torch
+import torch.nn as nn
+from models.common import *
+
+class Model(nn.Module):
+    def __init__(self, cfg='yolov5s.yaml', ch=3, nc=None, anchors=None):
+        super(Model, self).__init__()
+        # Load model yaml
         if isinstance(cfg, dict):
             self.yaml = cfg  # model dict
         else:  # is *.yaml
-            import yaml  # for torch hub
-
+            import yaml
             self.yaml_file = Path(cfg).name
-            with open(cfg, encoding="ascii", errors="ignore") as f:
+            with open(cfg, encoding='ascii', errors='ignore') as f:
                 self.yaml = yaml.safe_load(f)  # model dict
 
         # Define model
-        ch = self.yaml["ch"] = self.yaml.get("ch", ch)  # input channels
-        if nc and nc != self.yaml["nc"]:
-            LOGGER.info(f"Overriding model.yaml nc={self.yaml['nc']} with nc={nc}")
-            self.yaml["nc"] = nc  # override yaml value
+        ch = self.yaml['ch'] = self.yaml.get('ch', ch)  # input channels
+        if nc and nc != self.yaml['nc']:
+            print(f"Overriding {cfg} nc={self.yaml['nc']} with nc={nc}")
+            self.yaml['nc'] = nc  # override yaml value
         if anchors:
-            LOGGER.info(f"Overriding model.yaml anchors with anchors={anchors}")
-            self.yaml["anchors"] = round(anchors)  # override yaml value
+            print(f"Overriding {cfg} anchors with anchors={anchors}")
+            self.yaml['anchors'] = round(anchors)  # override yaml value
         self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch])  # model, savelist
-        self.names = [str(i) for i in range(self.yaml["nc"])]  # default names
-        self.inplace = self.yaml.get("inplace", True)
+        
+        # Replace original backbone with BackboneWithTransformer
+        self.model[0] = BackboneWithTransformer(self.model[0]) 
+
+        self.names = [str(i) for i in range(self.yaml['nc'])]  # class names
+        self.inplace = self.yaml.get('inplace', True)
 
         # Build strides, anchors
         m = self.model[-1]  # Detect()
-        if isinstance(m, (Detect, Segment)):
-
-            def _forward(x):
-                """Passes the input 'x' through the model and returns the processed output."""
-                return self.forward(x)[0] if isinstance(m, Segment) else self.forward(x)
-
+        if isinstance(m, Detect):
             s = 256  # 2x min stride
             m.inplace = self.inplace
-            m.stride = torch.tensor([s / x.shape[-2] for x in _forward(torch.zeros(1, ch, s, s))])  # forward
-            check_anchor_order(m)
+            m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))])  # forward
             m.anchors /= m.stride.view(-1, 1, 1)
             self.stride = m.stride
             self._initialize_biases()  # only run once
-
-        # Init weights, biases
         initialize_weights(self)
         self.info()
-        LOGGER.info("")
+        print('')
 
     def forward(self, x, augment=False, profile=False, visualize=False):
-        """Performs single-scale or augmented inference and may include profiling or visualization."""
         if augment:
             return self._forward_augment(x)  # augmented inference, None
         return self._forward_once(x, profile, visualize)  # single-scale inference, train
+
+    def _forward_once(self, x, profile=False, visualize=False):
+        y, dt = [], []  # outputs
+        for m in self.model:
+            if profile:
+                import thop
+                o = thop.profile(m, inputs=(x,), verbose=False)[0] / 1E9 * 2  # FLOPS
+                dt.append(o)
+            if m.f != -1:  # if not from previous layer
+                x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]
+            x = m(x)  # run
+            y.append(x if m.i in self.save else None)
+        return x
+
 
     def _forward_augment(self, x):
         """Performs augmented inference across different scales and flips, returning combined detections."""
@@ -454,10 +468,28 @@ def parse_model(d, ch):
         ch.append(c2)
     return nn.Sequential(*layers), sorted(save)
 
+class BackboneWithTransformer(nn.Module):
+    def __init__(self, original_backbone, transformer_layers=1, d_model=512, nhead=8, dim_feedforward=2048):
+        super(BackboneWithTransformer, self).__init__()
+        self.original_backbone = original_backbone
+        self.transformer = nn.ModuleList(
+            [TransformerEncoderLayer(d_model, nhead, dim_feedforward) for _ in range(transformer_layers)]
+        )
+
+    def forward(self, x):
+        x = self.original_backbone(x)
+        B, C, H, W = x.shape
+        x = x.flatten(2).permute(2, 0, 1)  # Reshape to [HW, B, C]
+        for layer in self.transformer:
+            x = layer(x)
+        x = x.permute(1, 2, 0).view(B, C, H, W)  # Reshape back to [B, C, H, W]
+        return x
+
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--cfg", type=str, default="yolov5s.yaml", help="model.yaml")
+    parser.add_argument("--cfg", type=str, default="yolov5-trans.yaml", help="model.yaml")
     parser.add_argument("--batch-size", type=int, default=1, help="total batch size for all GPUs")
     parser.add_argument("--device", default="", help="cuda device, i.e. 0 or 0,1,2,3 or cpu")
     parser.add_argument("--profile", action="store_true", help="profile model speed")
@@ -470,7 +502,7 @@ if __name__ == "__main__":
 
     # Create model
     im = torch.rand(opt.batch_size, 3, 640, 640).to(device)
-    model = Model(opt.cfg).to(device)
+    model = DetectionModel(opt.cfg).to(device)
 
     # Options
     if opt.line_profile:  # profile layer by layer
@@ -488,3 +520,4 @@ if __name__ == "__main__":
 
     else:  # report fused model summary
         model.fuse()
+
