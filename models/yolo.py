@@ -342,10 +342,10 @@ class Model(nn.Module):
             mi.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
 
 
-Model = DetectionModel  # retain YOLOv5 'Model' class for backwards compatibility
+Model = Model  # retain YOLOv5 'Model' class for backwards compatibility
 
 
-class SegmentationModel(DetectionModel):
+class SegmentationModel(Model):
     # YOLOv5 segmentation model
     def __init__(self, cfg="yolov5s-seg.yaml", ch=3, nc=None, anchors=None):
         """Initializes a YOLOv5 segmentation model with configurable params: cfg (str) for configuration, ch (int) for channels, nc (int) for num classes, anchors (list)."""
@@ -502,7 +502,7 @@ if __name__ == "__main__":
 
     # Create model
     im = torch.rand(opt.batch_size, 3, 640, 640).to(device)
-    model = DetectionModel(opt.cfg).to(device)
+    model = Model(opt.cfg).to(device)
 
     # Options
     if opt.line_profile:  # profile layer by layer
